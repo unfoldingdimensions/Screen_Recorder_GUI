@@ -6,7 +6,7 @@ A high-performance, modern screen recording application built with Python and Qt
 
 ## ✨ Features
 
-### 🖥️ versatile Recording Modes
+### 🖥️ Versatile Recording Modes
 *   **Full Screen**: Capture your entire desktop in high definition.
 *   **Window Mode**: Automatically detects and lists open windows for dedicated recording.
 *   **Custom Region**: Interactive overlay to draw and select a specific area to record.
