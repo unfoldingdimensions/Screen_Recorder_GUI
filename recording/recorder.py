@@ -1,8 +1,9 @@
-"""Main recording engine coordinating video and audio capture."""
-
 import time
 import threading
+import wave
+import os
 from enum import Enum
+from pathlib import Path
 from typing import Optional, Callable, Tuple
 import numpy as np
 from .video_capture import VideoCapture
@@ -49,6 +50,11 @@ class Recorder:
         self.state = RecordingState.IDLE
         self.recording_thread: Optional[threading.Thread] = None
         
+        # Temporary files for separate streams
+        self.temp_video_path: Optional[str] = None
+        self.temp_audio_path: Optional[str] = None
+        self.wave_file: Optional[wave.Wave_write] = None
+        
         # Statistics
         self.frames_recorded = 0
         self.audio_chunks_recorded = 0
@@ -63,6 +69,9 @@ class Recorder:
         # Audio mixing
         self.audio_buffer: list = []
         self.audio_buffer_lock = threading.Lock()
+        
+        # Frame buffering for duplication
+        self._last_frame: Optional[np.ndarray] = None
     
     def set_video_capture(self, video_capture: VideoCapture) -> None:
         """Set the video capture instance."""
@@ -89,29 +98,44 @@ class Recorder:
             return False
         
         try:
-            # Initialize encoder
+            # Check audio availability
             audio_enabled = self.audio_capture is not None and (
                 self.audio_capture.system_audio_enabled or 
                 self.audio_capture.microphone_enabled
             )
             
+            # Setup temporary files
+            output_dir = Path(self.output_path).parent
+            timestamp = int(time.time())
+            self.temp_video_path = str(output_dir / f".temp_video_{timestamp}.mp4")
+            
+            if audio_enabled:
+                self.temp_audio_path = str(output_dir / f".temp_audio_{timestamp}.wav")
+                try:
+                    self.wave_file = wave.open(self.temp_audio_path, 'wb')
+                    self.wave_file.setnchannels(AudioCapture.CHANNELS)
+                    self.wave_file.setsampwidth(AudioCapture.SAMPLE_WIDTH)
+                    self.wave_file.setframerate(AudioCapture.SAMPLE_RATE)
+                except Exception as e:
+                    print(f"Failed to open audio file: {e}")
+                    audio_enabled = False
+                    self.temp_audio_path = None
+                    self.wave_file = None
+            
+            # Initialize encoder with temp video path
             self.encoder = FFmpegEncoder(
-                output_path=self.output_path,
+                output_path=self.temp_video_path,
                 width=self.width,
                 height=self.height,
                 fps=self.fps,
                 bitrate=self.bitrate,
-                audio_enabled=audio_enabled,
+                audio_enabled=False,  # Audio handled separately by Recorder
                 sample_rate=AudioCapture.SAMPLE_RATE
             )
             
             if not self.encoder.start_encoding():
                 print("Failed to start encoder")
                 return False
-            
-            # Note: We use direct capture in the recording loop for precise timing
-            # Don't start the async capture thread
-            # self.video_capture.start_capture()
             
             # Start audio capture
             if self.audio_capture:
@@ -124,6 +148,7 @@ class Recorder:
             self.total_pause_duration = 0.0
             self.frames_recorded = 0
             self.audio_chunks_recorded = 0
+            self._last_frame = None
             
             self.recording_thread = threading.Thread(target=self._recording_loop, daemon=True)
             self.recording_thread.start()
@@ -152,24 +177,76 @@ class Recorder:
         self.state = RecordingState.IDLE
         
         # Wait for recording thread to finish BEFORE closing encoder
-        # This prevents race condition where thread tries to write to closed pipe
         if self.recording_thread:
             self.recording_thread.join(timeout=5.0)
             self.recording_thread = None
         
-        # Now it's safe to stop the encoder
+        # Stop video encoder (finalizes temp video file)
         if self.encoder:
+            # Optionally fill remaining frames if stops early?
+            # For now, just stop.
             self.encoder.stop_encoding()
             self.encoder = None
         
         # Stop audio capture
         if self.audio_capture:
             self.audio_capture.stop_capture()
+            
+        # Close audio file
+        if self.wave_file:
+            try:
+                self.wave_file.close()
+            except Exception as e:
+                print(f"Error closing audio file: {e}")
+            self.wave_file = None
+        
+        # Merge files
+        success = True
+        try:
+            if self.temp_video_path and os.path.exists(self.temp_video_path):
+                if self.temp_audio_path and os.path.exists(self.temp_audio_path) and os.path.getsize(self.temp_audio_path) > 100:
+                    # Merge video and audio
+                    print("Merging video and audio...")
+                    if not FFmpegEncoder.merge_audio_video(self.temp_video_path, self.temp_audio_path, self.output_path):
+                        print("Failed to merge files. Moving video only.")
+                        # Fallback: just move video file
+                        if os.path.exists(self.output_path):
+                            os.remove(self.output_path)
+                        os.rename(self.temp_video_path, self.output_path)
+                        success = False
+                else:
+                    # Video only (rename temp to output)
+                    print("Saving video only (no audio recorded or file too small)...")
+                    if os.path.exists(self.output_path):
+                        os.remove(self.output_path)
+                    os.rename(self.temp_video_path, self.output_path)
+            else:
+                print("Error: Temporary video file not found.")
+                success = False
+                
+        except Exception as e:
+            print(f"Error finalizing recording: {e}")
+            success = False
+        finally:
+            # Cleanup temp files
+            if self.temp_video_path and os.path.exists(self.temp_video_path):
+                try:
+                    os.remove(self.temp_video_path)
+                except Exception:
+                    pass
+            if self.temp_audio_path and os.path.exists(self.temp_audio_path):
+                try:
+                    os.remove(self.temp_audio_path)
+                except Exception:
+                    pass
+            
+            self.temp_video_path = None
+            self.temp_audio_path = None
         
         if self.on_state_changed:
             self.on_state_changed(self.state)
         
-        return True
+        return success
     
     def pause_recording(self) -> bool:
         """
@@ -211,65 +288,70 @@ class Recorder:
         return True
     
     def _recording_loop(self) -> None:
-        """Main recording loop running in separate thread."""
+        """Main recording loop using separate thread."""
         frame_interval = 1.0 / self.fps
-        next_frame_time = time.time()
-        
-        # Audio mixing
-        audio_samples_per_frame = int(AudioCapture.SAMPLE_RATE / self.fps)
         
         while self.state != RecordingState.IDLE:
             if self.state == RecordingState.PAUSED:
                 time.sleep(0.1)
-                # Reset timing after pause
-                next_frame_time = time.time()
                 continue
             
             current_time = time.time()
             
-            # Capture and write video frame at precise intervals
+            # 1. Video Frame Handling (CFR Logic)
             if self.video_capture and self.encoder:
-                if current_time >= next_frame_time:
-                    # Capture frame directly (synchronous, precise timing)
+                elapsed = current_time - self.start_time - self.total_pause_duration
+                expected_frames = int(elapsed * self.fps)
+                
+                # If we are behind schedule
+                if self.frames_recorded < expected_frames:
+                    frames_needed = expected_frames - self.frames_recorded
+                    
+                    # Try to get a fresh frame
                     frame = self.video_capture.capture_frame_direct()
                     
                     if frame is not None:
-                        # Write frame to encoder
-                        if self.encoder.write_video_frame(frame):
-                            self.frames_recorded += 1
+                        self._last_frame = frame
                     
-                    # Schedule next frame at exact interval (prevents drift)
-                    next_frame_time += frame_interval
+                    # Determine which frame to write
+                    # Use fresh frame if available, otherwise reuse last frame
+                    write_frame = frame if frame is not None else self._last_frame
                     
-                    # If we're running behind, catch up but don't try to make up lost frames
-                    if next_frame_time < current_time:
-                        next_frame_time = current_time + frame_interval
-                else:
-                    # Sleep until next frame time
-                    sleep_time = next_frame_time - current_time
-                    if sleep_time > 0:
-                        time.sleep(min(sleep_time, 0.01))
+                    if write_frame is not None:
+                        # Write as many frames as needed to catch up
+                        # Limit to a reasonable burst to prevent infinite loops if something goes wrong
+                        # e.g. if we are 100 frames behind, it might take too long to write all 100 now.
+                        # But we must write them to maintain sync.
+                        frames_to_write = min(frames_needed, 5) # Process max 5 at a time to keep UI responsive? 
+                        # Actually for CFR we really should catch up, or we lose time. 
+                        # Let's try to catch up completely but check for stop signal.
+                        
+                        for _ in range(frames_needed):
+                            if self.state == RecordingState.IDLE:
+                                break
+                                
+                            if self.encoder.write_video_frame(write_frame):
+                                self.frames_recorded += 1
+                            else:
+                                break
             
-            # Handle audio (simplified - mix system and microphone)
-            if self.audio_capture and self.encoder:
-                # Collect audio chunks
+            # 2. Audio Handling
+            if self.audio_capture and self.wave_file:
+                # Same audio logic as before...
                 audio_chunks = []
-                while len(audio_chunks) < 3:  # Get a few chunks
-                    chunk = self.audio_capture.get_audio_chunk(timeout=0.01)
+                while len(audio_chunks) < 5:
+                    chunk = self.audio_capture.get_audio_chunk(timeout=0.001)
                     if chunk:
                         audio_chunks.append(chunk)
                     else:
                         break
                 
-                # Mix audio if we have chunks
                 if audio_chunks:
-                    # Simple mixing: combine system and microphone
                     mixed_audio = None
                     for source, timestamp, audio_data in audio_chunks:
                         if mixed_audio is None:
                             mixed_audio = audio_data.copy()
                         else:
-                            # Mix by averaging (simple approach)
                             min_len = min(len(mixed_audio), len(audio_data))
                             mixed_audio[:min_len] = (
                                 mixed_audio[:min_len].astype(np.int32) + 
@@ -278,18 +360,22 @@ class Recorder:
                             mixed_audio = mixed_audio.astype(np.int16)
                     
                     if mixed_audio is not None:
-                        # Note: Actual audio writing to FFmpeg would go here
-                        # For now, we'll handle it in a simplified way
-                        self.audio_chunks_recorded += 1
+                        try:
+                            self.wave_file.writeframes(mixed_audio.tobytes())
+                            self.audio_chunks_recorded += 1
+                        except Exception as e:
+                            print(f"Error writing audio frames: {e}")
             
-            # Update progress
-            if self.start_time and self.on_progress:
-                elapsed = current_time - self.start_time - self.total_pause_duration
-                if self.pause_time:
-                    elapsed -= (current_time - self.pause_time)
-                self.on_progress(elapsed)
+            # 3. Sleep logic
+            # Calculate when the NEXT frame is due
+            next_frame_index = self.frames_recorded + 1
+            next_frame_time_offset = next_frame_index * frame_interval
+            target_time = self.start_time + self.total_pause_duration + next_frame_time_offset
             
-            # Frame rate pacing is handled in the video frame writing section above
+            sleep_time = target_time - time.time()
+            if sleep_time > 0:
+                time.sleep(min(sleep_time, 0.05)) # Sleep in small chunks to stay responsive
+
     
     def get_duration(self) -> float:
         """

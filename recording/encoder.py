@@ -130,8 +130,6 @@ class FFmpegEncoder:
             cmd = self._build_ffmpeg_command()
             
             # For simplicity, we'll use a single stdin for video
-            # Audio will be handled separately if needed (can be improved later)
-            # For now, if audio is enabled, we'll create the process but handle audio differently
             self.process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
@@ -293,3 +291,55 @@ class FFmpegEncoder:
             return time.time() - self.start_time
         return 0.0
 
+    @staticmethod
+    def merge_audio_video(video_path: str, audio_path: str, output_path: str) -> bool:
+        """
+        Merge video and audio files using FFmpeg.
+        
+        Args:
+            video_path: Path to video file
+            audio_path: Path to audio file
+            output_path: Path to output file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Find FFmpeg (can reuse the class method if we make it static or instantiate locally)
+            # For simplicity, we'll implement a simple finder here or assume it's valid if instance worked
+            ffmpeg_path = "ffmpeg"
+            possible_paths = [
+                "ffmpeg.exe",
+                str(Path(__file__).parent.parent / "ffmpeg" / "ffmpeg.exe"),
+                str(Path(__file__).parent.parent / "ffmpeg.exe"),
+            ]
+            
+            for path in possible_paths:
+                if Path(path).exists() or os.path.exists(path):
+                    ffmpeg_path = path
+                    break
+            
+            cmd = [
+                ffmpeg_path,
+                "-y",
+                "-i", video_path,
+                "-i", audio_path,
+                "-c:v", "copy",  # Copy video stream (already encoded)
+                "-c:a", "aac",   # Encode audio to AAC
+                "-shortest",     # Match duration of shortest stream
+                output_path
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                check=True
+            )
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            print(f"FFmpeg merge error: {e.stderr.decode()}")
+            return False
+        except Exception as e:
+            print(f"Error merging files: {e}")
+            return False

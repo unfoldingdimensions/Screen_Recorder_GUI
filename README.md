@@ -1,83 +1,105 @@
-# Screen Recorder Application
+# 🎥 PyScreen Recorder
 
-A modern 1080P screen recording application with PyQt6 GUI, supporting full screen, window, and region recording with dual audio (system + microphone).
+A high-performance, modern screen recording application built with Python and Qt. Designed for Windows with a sleek "Fluent-like" dark theme, it supports high-fps capture, system audio recording, and versatile capture modes.
 
-## Features
+![App Logo](Logo.png)
 
-- **Recording Modes**: Full screen, window selection, or custom region
-- **Audio Recording**: System audio and microphone with mixing
-- **Video Quality**: Adjustable quality presets, 30/60 FPS, 1080P support
-- **Controls**: Start/Stop, Pause/Resume, Timer with countdown
-- **Output**: MP4 format with H.264 video and AAC audio
+## ✨ Features
 
-## Installation
+### 🖥️ versatile Recording Modes
+*   **Full Screen**: Capture your entire desktop in high definition.
+*   **Window Mode**: Automatically detects and lists open windows for dedicated recording.
+*   **Custom Region**: Interactive overlay to draw and select a specific area to record.
+
+### 🎧 Advanced Audio
+*   **System Audio**: Captures desktop sounds (loopback) with high clarity.
+*   **Microphone**: Records voice commentary simultaneously.
+*   **Visual Feedback**: Real-time status indicators (●) show active audio devices.
+
+### 🎨 Modern UI/UX
+*   **Dark Theme**: Professional dark interface (`#202020`) with card-based layout.
+*   **Fluent Design**: Rounded corners, accent colors, and Segoe UI variable typography.
+*   **Countdown**: Customizable countdown timer before recording starts.
+*   **Status Bar**: Context-aware status updates and timer display.
+
+### ⚙️ Performance & Quality
+*   **High Performance**: Multithreaded capture pipeline using `mss` with thread-local storage optimization.
+*   **Smooth Playback**: Implements Constant Frame Rate (CFR) logic to ensure perfect audio/video sync.
+*   **Configurable**:
+    *   **Resolution**: 720p, 1080p, 1440p, 4K support.
+    *   **FPS**: 24, 30, or 60 FPS options.
+    *   **Quality**: Preset bitrates (Low/Medium/High) or custom values.
+
+---
+
+## 🛠️ Installation
 
 ### Prerequisites
+1.  **Python 3.10+**: [Download Python](https://www.python.org/downloads/)
+2.  **FFmpeg**: Required for video encoding.
+    *   Download from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or use `winget install ffmpeg`.
+    *   **Important**: Ensure `ffmpeg.exe` is in your system `PATH` or placed in the project root.
 
-1. **Python 3.10+** - Download from [python.org](https://www.python.org/downloads/)
+### Setup
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/yourusername/screen-recorder.git
+    cd screen-recorder
+    ```
+2.  Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-2. **FFmpeg** - Required for video encoding
-   - Download static build from [ffmpeg.org](https://ffmpeg.org/download.html)
-   - Extract and add `ffmpeg.exe` to your PATH, or place it in the project directory
-   - For Windows: Download from [www.gyan.dev/ffmpeg/builds/](https://www.gyan.dev/ffmpeg/builds/) or use chocolatey: `choco install ffmpeg`
-   - **Important**: FFmpeg must be accessible from command line. Test with: `ffmpeg -version`
+---
 
-3. **Install Python Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+## 🚀 Usage
 
-   **Note**: `pyaudio` may require additional setup on Windows:
-   - If installation fails, download the wheel from [here](https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio)
-   - Or use: `pip install pipwin && pipwin install pyaudio`
-
-## Usage
-
-### Running from Source
-
+Run the application:
 ```bash
 python main.py
 ```
 
-### Building Executable
+### Quick Start Guide
+1.  **Select Mode**: Choose between Full Screen, Window, or Region.
+2.  **Check Audio**: Verify System Audio and Microphone indicators are active if needed.
+3.  **Start**: Click **Start Recording** (or use the configured hotkey).
+4.  **Stop**: Click **Stop** to finish. The video is automatically merged and saved.
+5.  **Locate File**: The output path is displayed at the bottom of the window (default: `Records/`).
 
-1. Ensure FFmpeg is accessible (in PATH or project directory)
-2. Build with PyInstaller:
-   ```bash
-   pyinstaller build.spec
-   ```
-3. The executable will be in the `dist/` directory
+---
 
-## Configuration
+## 🔧 Configuration
 
-Settings are saved automatically and include:
-- Recording mode preference
-- Quality settings (resolution, FPS, bitrate)
-- Audio source selection
-- Output directory
+Click the **Configure...** button to access advanced settings:
 
-## System Requirements
+*   **Video**: Resolution, FPS, and Bitrate presets.
+*   **Audio**: Toggle audio sources.
+*   **Countdown**: Enable/Disable and set duration (1-10s).
 
-- Windows 10/11
-- Python 3.10+
-- FFmpeg (bundled in .exe or system PATH)
-- Audio drivers supporting WASAPI loopback (for system audio capture)
+---
 
-## Troubleshooting
+## 💻 Tech Stack
 
-### System Audio Not Capturing
-- Ensure you're using Windows 10/11 with WASAPI support
-- Some audio drivers may require elevated permissions
-- System audio capture requires WASAPI loopback support
-- Alternative: Use virtual audio cable software (e.g., VB-Audio Cable, OBS Virtual Audio Cable)
-- Note: Audio encoding is currently simplified - full audio support may require additional FFmpeg configuration
+*   **GUI**: [PyQt6](https://pypi.org/project/PyQt6/)
+*   **Capture**: [mss](https://pypi.org/project/mss/) (Fast cross-platform screen shot)
+*   **Audio**: [sounddevice](https://pypi.org/project/sounddevice/) (PortAudio wrapper)
+*   **Processing**: [FFmpeg](https://ffmpeg.org/) (Video muxing and encoding)
+*   **Process Management**: `subprocess` & `threading`
 
-### FFmpeg Not Found
-- Ensure FFmpeg is in your system PATH, or
-- Place `ffmpeg.exe` in the same directory as the application
+---
 
-### Performance Issues
-- Lower FPS or quality settings
-- Close unnecessary applications
-- Use hardware acceleration if available (NVENC/QuickSync)
+## 📝 Troubleshooting
 
+**"No loopback device found"**
+*   Ensure "Stereo Mix" is enabled in Windows Sound settings if using older drivers, or ensure usage of WASAPI loopback (default in app).
+*   If basic loopback fails, the app attempts to fallback to microphone only.
+
+**Video plays too fast**
+*   This version implements CFR (Constant Frame Rate). If this persists, ensure your PC can handle the selected FPS/Resolution. Try lowering specific settings.
+
+**FFmpeg not found**
+*   Verify `ffmpeg -version` works in your terminal.
+*   Or place `ffmpeg.exe` directly next to `main.py`.
+
+---

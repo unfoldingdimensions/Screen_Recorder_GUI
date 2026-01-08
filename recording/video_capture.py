@@ -44,6 +44,9 @@ class VideoCapture:
         # Setup capture region using a temporary mss instance
         temp_sct = mss.mss()
         self._setup_capture_region(temp_sct)
+        
+        # Thread-local storage for direct capture
+        self._thread_local = threading.local()
     
     def _setup_capture_region(self, sct: Optional[mss.mss] = None) -> None:
         """
@@ -242,26 +245,30 @@ class VideoCapture:
         """
         try:
             # Create mss instance if not exists (thread-local, so create per call for safety)
-            with mss.mss() as sct:
-                if not self.capture_rect:
-                    return None
+            if not hasattr(self._thread_local, "sct"):
+                self._thread_local.sct = mss.mss()
+            
+            sct = self._thread_local.sct
+            
+            if not self.capture_rect:
+                return None
+            
+            # Capture screen
+            screenshot = sct.grab(self.capture_rect)
                 
-                # Capture screen
-                screenshot = sct.grab(self.capture_rect)
+            # Convert to numpy array (BGRA format from mss)
+            frame = np.array(screenshot)
+            
+            # Convert BGRA to RGB for FFmpeg
+            frame_rgb = frame[:, :, [2, 1, 0]]  # BGRA -> RGB
+            
+            # Ensure it's uint8 and contiguous
+            if frame_rgb.dtype != np.uint8:
+                frame_rgb = frame_rgb.astype(np.uint8)
+            if not frame_rgb.flags['C_CONTIGUOUS']:
+                frame_rgb = np.ascontiguousarray(frame_rgb)
                 
-                # Convert to numpy array (BGRA format from mss)
-                frame = np.array(screenshot)
-                
-                # Convert BGRA to RGB for FFmpeg
-                frame_rgb = frame[:, :, [2, 1, 0]]  # BGRA -> RGB
-                
-                # Ensure it's uint8 and contiguous
-                if frame_rgb.dtype != np.uint8:
-                    frame_rgb = frame_rgb.astype(np.uint8)
-                if not frame_rgb.flags['C_CONTIGUOUS']:
-                    frame_rgb = np.ascontiguousarray(frame_rgb)
-                
-                return frame_rgb
+            return frame_rgb
                 
         except Exception as e:
             print(f"Error in direct capture: {e}")
